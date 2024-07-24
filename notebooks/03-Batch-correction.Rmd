@@ -1,0 +1,286 @@
+---
+title: "Batch_correction - OG data"
+author: "Jacopo Umberto verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Single Cell object
+
+Considering  the lower correlation between channels with spillover in the previous notebook, I am going to use the spillover corrected original images for the next analysis
+
+
+
+```{r spatial-load-data, message=FALSE, cache=FALSE}
+library(SpatialExperiment)
+library(tidyverse)
+library(cytomapper)
+library(imcRtools)
+library(stringr)
+library(scater)
+library(BiocParallel)
+multicore=MulticoreParam(workers=16)
+
+spe <- readRDS("../data/non_denoised/spe_spillover_corrected.rds")
+
+# Overwrite assays woth the corrected ones
+assay(spe, "counts") <- assay(spe, "compcounts") 
+assay(spe, "exprs") <- assay(spe, "compexprs") 
+assay(spe, "compcounts") <- assay(spe, "compexprs") <- NULL
+```
+
+To run dimensionality reduction and clustering I am going to use:
+- A subset of cells (10%) to reduce the computational times
+-  subset of markers to reduce the noise
+
+
+```{r select-features, , cache=FALSE}
+
+meta_ds <- read.csv("../Session4_single_cell_analysis/adata_ds_meta.csv")
+
+# spe_bkp <- spe
+# spe <- spe[,colnames(spe) %in% meta_ds$X]
+
+
+
+features_oi <- c('CD45','CD45RO','CD3','CD4','CD8','CD20','CD27','CD138','CD14','CD16','CD56','CD68','CD11c','CD11b','CD31','aSMA')
+
+rowData(spe)$use_channel <- rownames(spe) %in% features_oi
+rowData(spe)['use_channel']
+```
+
+# Dimensionality reduction and visualization
+
+Before doing the batch correction, I will try to run PCA, KNN, UMAP of non-integrated data:
+
+```{r dimred, message=FALSE, cache=FALSE}
+set.seed(12345)
+spe <- runUMAP(spe, subset_row = rowData(spe)$use_channel, exprs_values = "exprs", BPPARAM=multicore) 
+```
+
+After dimensionality reduction, the low-dimensional embeddings are stored in the 
+`reducedDim` slot.
+
+```{r show-dimred-slot, cache=FALSE}
+reducedDims(spe)
+head(reducedDim(spe, "UMAP"))
+```
+
+
+
+```{r visualizing-dimred-1, fig.height=12, fig.width=8, message=FALSE, paged.print=FALSE, cache=FALSE}
+library(patchwork)
+library(dittoSeq)
+library(viridis)
+
+# visualize patient id 
+p1 <- dittoDimPlot(spe, var = "sample_id", reduction.use = "UMAP", size = 0.2, legend.show = FALSE) + 
+    ggtitle("Patient ID on UMAP")
+p2 <- dittoDimPlot(spe, var = "patient_n", reduction.use = "UMAP", size = 0.2, legend.size = 3) + 
+    ggtitle("Slide ID on UMAP")
+
+# visualize indication
+p3 <- dittoDimPlot(spe, var = "timepoint", reduction.use = "UMAP", size = 0.2, legend.size = 3) + 
+    scale_color_manual(values = metadata(spe)$color_vectors$timepoint) +
+    ggtitle("Timepoint on UMAP")
+p4 <- dittoDimPlot(spe, var = "CD3", reduction.use = "UMAP", size = 0.2, legend.size = 3) + 
+    ggtitle("CD3 on UMAP")
+# visualize indication
+p5 <- dittoDimPlot(spe, var = "CD138", reduction.use = "UMAP", size = 0.2, legend.size = 3) + 
+    ggtitle("CD138 on UMAP")
+p6 <- dittoDimPlot(spe, var = "CD31", reduction.use = "UMAP", size = 0.2, legend.size = 3) + 
+    ggtitle("CD31 on UMAP")
+
+(p1 + p2) / (p3 + p4) / (p5+p6)
+```
+
+
+We can see a lil batch effect and not good division between features. Batch correction on slide ID.
+
+
+# Batch correction
+
+
+## fastMNN correction
+
+
+```{r batch-correction-fastMNN, message=FALSE, warning=FALSE, cache=FALSE}
+library(batchelor)
+set.seed(12345)
+out <- fastMNN(spe, batch = spe$sample_id,
+               auto.merge = TRUE,
+               subset.row = rowData(spe)$use_channel,
+               assay.type = "exprs",
+               BPPARAM = multicore)
+
+# Transfer the correction results to the main spe object
+reducedDim(spe, "fastMNN") <- reducedDim(out, "corrected")
+```
+
+
+
+```{r batch-correction-fastMNN-QC, message=FALSE, cache=FALSE}
+merge_info <- metadata(out)$merge.info 
+
+DataFrame(left = merge_info$left,
+          right = merge_info$right,
+          batch.size = merge_info$batch.size,
+          max_lost_var = rowMax(merge_info$lost.var))
+```
+
+
+
+
+### Visualization
+
+
+```{r dimred-batch-correction-fastMNN, message=FALSE, warning=FALSE, cache=FALSE}
+library(scater)
+
+set.seed(12345)
+spe <- runUMAP(spe, dimred= "fastMNN", name = "UMAP_mnnCorrected") 
+```
+
+
+```{r visualizing-dimred-2, fig.height=12, fig.width=8, message=FALSE, paged.print=FALSE, cache=FALSE}
+library(patchwork)
+library(dittoSeq)
+library(viridis)
+
+# visualize patient id 
+p1 <- dittoDimPlot(spe, var = "sample_id", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.show = FALSE) + 
+    ggtitle("Patient ID on UMAP")
+p2 <- dittoDimPlot(spe, var = "patient_n", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.size = 3) + 
+    ggtitle("Slide ID on UMAP")
+
+# visualize indication
+p3 <- dittoDimPlot(spe, var = "timepoint", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.size = 3) + 
+    scale_color_manual(values = metadata(spe)$color_vectors$timepoint) +
+    ggtitle("Timepoint on UMAP")
+p4 <- dittoDimPlot(spe, var = "CD3", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.size = 3) + 
+    ggtitle("CD3 on UMAP")
+# visualize indication
+p5 <- dittoDimPlot(spe, var = "CD138", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.size = 3) + 
+    ggtitle("CD138 on UMAP")
+p6 <- dittoDimPlot(spe, var = "CD31", reduction.use = "UMAP_mnnCorrected", size = 0.2, legend.size = 3) + 
+    ggtitle("CD31 on UMAP")
+
+(p1 + p2) / (p3 + p4) / (p5+p6)
+```
+
+
+
+```{r visualizing-batch-correction-fastMNN-2, warning=FALSE, message=FALSE, fig.height=8, cache=FALSE}
+library(cowplot)
+# Before correction
+plot_list <- multi_dittoDimPlot(spe, var = features_oi, reduction.use = "UMAP", 
+                   assay = "exprs", size = 0.2, list.out = TRUE) 
+plot_list <- lapply(plot_list, function(x) x + scale_color_viridis())
+plot_grid(plotlist = plot_list) 
+
+# After correction
+plot_list <- multi_dittoDimPlot(spe, var = features_oi, reduction.use = "UMAP_mnnCorrected", 
+                   assay = "exprs", size = 0.2, list.out = TRUE) 
+plot_list <- lapply(plot_list, function(x) x + scale_color_viridis())
+plot_grid(plotlist = plot_list) 
+```
+
+
+
+## Harmony
+
+```{r run_harmony, cache=FALSE}
+library(harmony)
+library(BiocSingular)
+
+spe <- runPCA(spe, 
+              subset_row = rowData(spe)$use_channel, 
+              exprs_values = "exprs", 
+              ncomponents = 15,
+              BSPARAM = ExactParam())
+
+set.seed(12345)
+out <- RunHarmony(spe, group.by.vars = "sample_id",
+                  lambda=.1,
+                  plot_convergence=TRUE)
+
+# Check that order of cells is the same
+stopifnot(all.equal(colnames(spe), colnames(out)))
+
+reducedDim(spe, "harmony") <- reducedDim(out, "HARMONY")
+```
+
+
+### Visualization
+
+
+```{r dimred-batch-correction-harmony, message=FALSE, warning=FALSE, cache=FALSE}
+library(scater)
+
+set.seed(12345)
+spe <- runUMAP(spe, dimred= "harmony", name = "UMAP_harmony") 
+```
+
+Next, we visualize the corrected UMAP while overlaying patient IDs.
+
+```{r visualizing-dimred-3, fig.height=12, fig.width=8, message=FALSE, paged.print=FALSE, cache=FALSE}
+library(patchwork)
+library(dittoSeq)
+library(viridis)
+
+# visualize patient id 
+p1 <- dittoDimPlot(spe, var = "sample_id", reduction.use = "UMAP_harmony", size = 0.2, legend.show = FALSE) + 
+    ggtitle("Patient ID on UMAP")
+p2 <- dittoDimPlot(spe, var = "patient_n", reduction.use = "UMAP_harmony", size = 0.2, legend.size = 3) + 
+    ggtitle("Slide ID on UMAP")
+
+# visualize indication
+p3 <- dittoDimPlot(spe, var = "timepoint", reduction.use = "UMAP_harmony", size = 0.2, legend.size = 3) + 
+    scale_color_manual(values = metadata(spe)$color_vectors$timepoint) +
+    ggtitle("Timepoint on UMAP")
+p4 <- dittoDimPlot(spe, var = "CD3", reduction.use = "UMAP_harmony", size = 0.2, legend.size = 3) + 
+    ggtitle("CD3 on UMAP")
+# visualize indication
+p5 <- dittoDimPlot(spe, var = "CD138", reduction.use = "UMAP_harmony", size = 0.2, legend.size = 3) + 
+    ggtitle("CD138 on UMAP")
+p6 <- dittoDimPlot(spe, var = "CD31", reduction.use = "UMAP_harmony", size = 0.2, legend.size = 3) + 
+    ggtitle("CD31 on UMAP")
+
+(p1 + p2) / (p3 + p4) / (p5+p6)
+```
+
+
+
+```{r visualizing-batch-correction-harmony-2, warning=FALSE, message=FALSE, fig.height=8, cache=FALSE}
+
+# Before correction
+plot_list <- multi_dittoDimPlot(spe, var = features_oi, reduction.use = "UMAP", 
+                   assay = "exprs", size = 0.2, list.out = TRUE) 
+plot_list <- lapply(plot_list, function(x) x + scale_color_viridis())
+plot_grid(plotlist = plot_list) 
+
+# After correction
+plot_list <- multi_dittoDimPlot(spe, var = features_oi, reduction.use = "UMAP_harmony", 
+                   assay = "exprs", size = 0.2, list.out = TRUE) 
+plot_list <- lapply(plot_list, function(x) x + scale_color_viridis())
+plot_grid(plotlist = plot_list) 
+```
+
+# Save object
+
+```{r save-objects}
+saveRDS(spe, "../data/non_denoised/spe_batch_corrected_sample_id.Rds")
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```

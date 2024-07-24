@@ -1,0 +1,357 @@
+---
+title: "Spillover correction - comparison denoised non-denoised"
+author: "Jacopo Umberto Verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries}
+invisible(suppressMessages(c(library(imcRtools),
+                 library(tidyverse),
+                 library(patchwork),
+                 library(scater),
+                 library(BiocParallel),
+                 library(CATALYST),
+                 library(pheatmap),
+                 library(cytomapper))))
+
+multicore=MulticoreParam(workers=16)
+```
+
+
+# Import spatial dataset
+
+I run the steinbock pipeline with the original data. Now I am going to run the spillover correction, observe the results and compare with the denoised data
+
+```{r load_spe}
+spe_dn <- readRDS("/home/rstudio/workspace/data/mydata/spe.rds")
+spe_og <- readRDS("/home/rstudio/workspace/data/non_denoised/spe.rds")
+```
+
+
+
+
+## Single-cell data compensation
+
+The `CATALYST` package can be used to perform spillover compensation on the
+**single-cell mean intensities**. Here, the `SpatialExperiment` object generated
+in in the previous Session is read in. The `CATALYST` package requires an entry
+to `rowData(spe)$channel_name` for the `compCytof` function to run. This entry
+should contain the metal isotopes in the form (mt)(mass)Di (e.g., `Sm152Di` for
+Samarium isotope with the atomic mass 152). 
+
+The `compCytof` function performs channel spillover compensation on the mean
+pixel intensities per channel and cell. Here, we will not overwrite the assays
+in the `SpatialExperiment` object to later highlight the effect of compensation.
+As shown in the previous session, also the compensated counts are
+asinh-transformed using a cofactor of 1.
+
+```{r single-cell-compensation}
+
+sm <- read.csv('/home/rstudio/workspace/data/compensation_matrix_hyperion/compensation_matrix.csv', header = TRUE,  check.names = FALSE, row.names = '')
+sm <- sm[rownames(sm)]
+sm[is.na(sm)] <- 0
+sm <- sm/100
+sm <- as.matrix(sm)
+diag(sm) <- 1
+
+
+spillover_correction <- function(spe, sm){
+    channel_names <- paste0(gsub("[()]","", rowData(spe)$channel),"Di")
+    rowData(spe)$channel_name <- channel_names
+    rownames(sm) <- channel_names
+    colnames(sm) <- channel_names
+    
+    isotope_list <- CATALYST::isotope_list
+    isotope_list$Ar <- 80
+    spe <- compCytof(spe, sm, 
+                     transform = TRUE, cofactor = 1,
+                     isotope_list = isotope_list, 
+                     overwrite = FALSE)
+    return(spe)
+}
+
+```
+
+```{r}
+
+spe_og <- spillover_correction(spe_og, sm)
+spe_dn <- spillover_correction(spe_dn, sm)
+
+```     
+
+
+
+To check the effect of channel spillover compensation, the expression of markers
+that are affected by spillover (e.g., GZMK in channel Gd(158) and aSMA in
+channel Nd(142)) can be visualized in form of scatter plots before and after
+compensation.
+
+```{r visualize-single-cell-spillover, message=FALSE}
+library(dittoSeq)
+library(patchwork)
+
+spill1='aSMA'
+spill2='Granzyme_K'
+
+corr = cor(as.data.frame(t(exprs(spe_og)))[c(spill1, spill2)])[2,1]
+before_og <- dittoScatterPlot(spe_og, x.var = spill1, y.var = spill2,
+                           assay.x = "exprs", assay.y = "exprs") +
+    ggtitle(paste0("Before compensation - Original - ", round(corr,2)))
+
+mat = as.data.frame(t(spe_og@assays@data$compexprs))
+meta = rowData(spe_og)['channel_name']
+colnames(mat) <-rownames(meta)[match(colnames(mat), meta$channel_name)]
+corr = cor(mat[c(spill1, spill2)])[2,1]
+after_og <- dittoScatterPlot(spe_og, x.var = spill1, y.var = spill2,
+                          assay.x = "compexprs", assay.y = "compexprs") +
+    ggtitle(paste0("After compensation - Original - ", round(corr,2)))
+
+
+corr = cor(as.data.frame(t(exprs(spe_dn)))[c(spill1, spill2)])[2,1]
+before_dn <- dittoScatterPlot(spe_dn, x.var = spill1, y.var = spill2,
+                           assay.x = "exprs", assay.y = "exprs") +
+    ggtitle(paste0("Before compensation - Denoised - ", round(corr,2)))
+
+
+mat = as.data.frame(t(spe_dn@assays@data$compexprs))
+meta = rowData(spe_og)['channel_name']
+colnames(mat) <-rownames(meta)[match(colnames(mat), meta$channel_name)]
+corr = cor(mat[c(spill1, spill2)])[2,1]
+after_dn <- dittoScatterPlot(spe_dn, x.var = spill1, y.var = spill2,
+                          assay.x = "compexprs", assay.y = "compexprs") +
+    ggtitle(paste0("After compensation - Denoised - ", round(corr,2)))
+(before_og + after_og)/(before_dn + after_dn)
+
+```
+
+
+
+
+
+
+```{r fig.height=12, fig.width=15}
+library(reshape2)
+ 
+
+mat = t(exprs(spe_og))
+corr_mat <- cor(mat)
+dist <- as.dist((1-corr_mat)/2)
+hc <- hclust(dist)
+clusterCut <- cutree(hc,3)
+# Convert named integer vector to a list of observations per cluster
+cluster_list_og_pre <- split(names(clusterCut), clusterCut)
+
+
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+p1 = ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2, fill=value)) + 
+geom_tile() + 
+    labs(title='Correlation before compensation - Original')+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+mat = t(spe_og@assays@data$compexprs)
+meta = rowData(spe_og)['channel_name']
+colnames(mat) <-rownames(meta)[match(colnames(mat), meta$channel_name)]
+corr_mat <- cor(mat)
+dist <- as.dist((1-corr_mat)/2)
+ hc <- hclust(dist)
+ 
+clusterCut <- cutree(hc,3)
+# Convert named integer vector to a list of observations per cluster
+cluster_list_og_post <- split(names(clusterCut), clusterCut)
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+p2 = ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2, fill=value)) + 
+geom_tile() + 
+    labs(title='Correlation after compensation - Original')+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+mat = t(exprs(spe_dn))
+corr_mat <- cor(mat)
+dist <- as.dist((1-corr_mat)/2)
+ hc <- hclust(dist)
+ 
+clusterCut <- cutree(hc,3)
+# Convert named integer vector to a list of observations per cluster
+cluster_list_dn_pre <- split(names(clusterCut), clusterCut)
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+p3 = ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2, fill=value)) + 
+geom_tile() + 
+    labs(title='Correlation before compensation - Denoised')+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+mat = t(spe_dn@assays@data$compexprs)
+meta = rowData(spe_og)['channel_name']
+colnames(mat) <-rownames(meta)[match(colnames(mat), meta$channel_name)]
+corr_mat <- cor(mat)
+dist <- as.dist((1-corr_mat)/2)
+hc <- hclust(dist)
+clusterCut <- cutree(hc,3)
+# Convert named integer vector to a list of observations per cluster
+cluster_list_dn_post <- split(names(clusterCut), clusterCut)
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+p4 = ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2, fill=value)) + 
+geom_tile() + 
+    labs(title='Correlation after compensation - Denoised')+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+(p1+p2)/(p3+p4)
+```
+
+
+```{r}
+# Function to transform vector into comma-separated string
+vector_to_string <- function(vec) {
+  return(paste(vec, collapse = ", "))
+}
+
+# Combine lists into a named list of lists
+named_lists <- list(list1 =  lapply(cluster_list_og_pre, vector_to_string), 
+                    list2 =  lapply(cluster_list_og_post, vector_to_string), 
+                    list3 =  lapply(cluster_list_dn_pre, vector_to_string), 
+                    list4 =  lapply(cluster_list_dn_post, vector_to_string))
+
+# Extract values for common names (1, 2, 3, 4) and store in a matrix
+num_lists <- length(named_lists)
+common_names <- c("1", "2", "3")
+
+# Initialize a matrix to store the values
+data_matrix <- matrix("", nrow = num_lists, ncol = length(common_names))
+
+# Loop over each list and extract values for common names
+for (i in 1:num_lists) {
+  list_elements <- unlist(named_lists[[i]])  # Flatten the list elements
+  values <- sapply(common_names, function(name) list_elements[[name]])  # Extract values for common names
+  data_matrix[i, ] <- values
+}
+
+
+
+
+# Convert the matrix to a DataFrame with appropriate column names
+df <- as.data.frame(data_matrix)
+colnames(df) <- common_names
+
+# Print the resulting DataFrame
+df
+```
+
+
+```{r save-objects-read-data}
+saveRDS(spe_og, "/home/rstudio/workspace/data/non_denoised/spe_spillover_corrected.rds")
+saveRDS(spe_dn, "/home/rstudio/workspace/data/mydata/spe_spillover_corrected.rds")
+```
+
+## Image compensation
+
+The [cytomapper](https://github.com/BodenmillerGroup/cytomapper) package allows channel
+spillover compensation directly on **multi-channel images**. 
+The `compImage` function takes a `CytoImageList` object and the estimated
+spillover matrix as input. 
+
+At this point, we can read in the `CytoImageList` object containing multi-channel
+images as generated in the previous session.
+The `channelNames` need to be set according to their metal isotope in the form
+(mt)(mass)Di and therefore match `colnames(sm)`.
+
+```{r read-in-image, eval=FALSE, message=FALSE, include=FALSE}
+library(cytomapper)
+
+images <- readRDS("/home/rstudio/workspace/data/non_denoised/images.rds")
+masks <- readRDS("/home/rstudio/workspace/data/non_denoised/masks.rds")
+channelNames(images) <- rowData(spe)$channel_name
+```
+
+The CATALYST package provides the `adaptSpillmat` function that corrects the
+spillover matrix in a way that rows and columns match a predefined set of
+metals. Please refer to `?compCytof` for more information how metals in the
+spillover matrix are matched to acquired channels in the `SingleCellExperiment`
+object.
+
+The spillover matrix can now be adapted to exclude channels that are not part of
+the measurement (`keep == 0`).
+
+```{r eval=FALSE, include=FALSE}
+library(tiff)
+panel <- read.csv("/home/rstudio/workspace/data/non_denoised//panel.csv")
+
+channel_names <- paste0(gsub("[()]","", rowData(spe)$channel),"Di")
+rowData(spe)$channel_name <- channel_names
+rownames(sm) <- channel_names
+colnames(sm) <- channel_names
+
+isotope_list <- CATALYST::isotope_list
+isotope_list$Ar <- 80
+
+adapted_sm <- adaptSpillmat(sm, paste0(gsub("[()]","", panel$channel[panel$keep == 1]),"Di"), 
+                            isotope_list = isotope_list)
+```
+
+The adpated spillover matrix now matches the `channelNames` of the
+`CytoImageList` object and can be used to perform pixel-level spillover
+compensation.
+
+```{r image-compensation, eval=FALSE, message=FALSE, include=FALSE}
+library(BiocParallel)
+library(parallel)
+
+images_comp <- compImage(images, adapted_sm, 
+                         BPPARAM = MulticoreParam(workers = 16))
+```
+
+As a sanity check, we will visualize the image before and after compensation:
+
+```{r image-visualization, eval=FALSE, message=FALSE, include=FALSE}
+# Before compensation
+plotPixels(images[5], colour_by = "Nd142Di", 
+           image_title = list(text = "Nd142Di (aSMA) - before", position = "topleft"), 
+           legend = NULL, bcg = list(Nd142Di = c(0, 4, 1)))
+plotPixels(images[5], colour_by = "Gd158Di", 
+           image_title = list(text = "Gd158Di (GZMK) - before", position = "topleft"), 
+           legend = NULL, bcg = list(Gd158Di = c(0, 4, 1)))
+
+# After compensation
+plotPixels(images_comp[5], colour_by = "Nd142Di",
+           image_title = list(text = "Nd142Di (aSMA) - after", position = "topleft"), 
+           legend = NULL, bcg = list(Nd142Di = c(0, 4, 1)))
+plotPixels(images_comp[5], colour_by = "Gd158Di", 
+           image_title = list(text = "Gd158Di (GZMK) - after", position = "topleft"),
+           legend = NULL, bcg = list(Gd158Di = c(0, 4, 1)))
+```
+
+For convenience, we will re-set the `channelNames` to their biological targtes:
+
+```{r re-set-channels, eval=FALSE, message=FALSE, include=FALSE}
+channelNames(images_comp) <- rownames(spe)
+```
+
+
+
+```{r save-images-read-data, eval=FALSE, message=FALSE, include=FALSE}
+saveRDS(images_comp, "/home/rstudio/workspace/data/non_denoised/images_comp.rds")
+
+```

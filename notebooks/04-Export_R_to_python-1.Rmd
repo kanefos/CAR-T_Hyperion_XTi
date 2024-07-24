@@ -1,0 +1,65 @@
+---
+title: "Export_to_python"
+author: "Jacopo Umberto verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+
+```{r spatial-load-data, message=FALSE, cache=FALSE}
+library(SpatialExperiment)
+library(SingleCellExperiment)
+library(tidyverse)
+library(cytomapper)
+library(imcRtools)
+library(stringr)
+library(scater)
+library(BiocParallel)
+library(viridis)
+multicore=MulticoreParam(workers=16)
+
+
+
+patient_to_dfci_id <- read.csv('../data/metadata/20240515_DFCI_ID and Case_Number.csv')
+colnames(patient_to_dfci_id) <- c('DFCI_id','patient_n','slide_id','tissue_id','MRN')
+spe <- readRDS("../data/non_denoised/spe_minor_celltypes_updated.Rds")
+meta<-as.data.frame(colData(spe))
+meta$index <- rownames(meta)
+meta <- merge(meta, patient_to_dfci_id, by = c('patient_n','slide_id','tissue_id'), all.x = TRUE)
+rownames(meta) <- meta$index
+spe$DFCI_id <- meta$DFCI_id
+spe$MRN <- meta$MRN
+
+
+```
+
+
+## export to python
+
+```{r}
+write.csv(t(exprs(spe)), '../data/non_denoised/csv_tables/exprs.csv')
+write.csv(t(counts(spe)), '../data/non_denoised/csv_tables/counts.csv')
+write.csv(t(spe@assays@data$logcounts), '../data/non_denoised/csv_tables/counts.csv')
+
+write.csv(rowData(spe), '../data/non_denoised/csv_tables/features_metadata.csv')
+write.csv(colData(spe), '../data/non_denoised/csv_tables/observations_metadata.csv')
+
+
+for (x in names(reducedDims(spe))) {
+  write.csv(reducedDim(spe,x), paste0('../data/non_denoised/csv_tables/',x,'.csv'))
+}
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
