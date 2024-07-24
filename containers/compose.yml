@@ -1,0 +1,51 @@
+services:
+    rstudio:
+        profiles:
+          - rstudio
+        build:
+          context: ./rstudio_container
+          dockerfile: Dockerfile
+        image: rstudio:latest
+        container_name: spatial_env
+        volumes:
+            - ./:/home/rstudio/workspace
+        ports:
+            - "8890:8787"
+        environment:
+          - PASSWORD=123
+    jupyter:
+        image: jupyter:latest
+        profiles:
+          - jupyter
+        build:
+          context: ./jupyter_env
+          dockerfile: Dockerfile
+        container_name: jupyter_env
+        volumes:
+          - ./:/home/jacopo/work
+        user: 'root'
+        ports:
+          - "8888:8888"
+        environment:
+          - ENABLE_JUPYTER_LAB=yes
+          - JUPYTER_TOKEN=123
+          - NB_USER=jacopo
+          - CHOWN_HOME=yes
+        working_dir: /home/jacopo
+    inkscape:
+        image: lscr.io/linuxserver/inkscape:latest
+        profiles:
+          - inkscape
+        container_name: inkscape
+        security_opt:
+          - seccomp:unconfined #optional
+        environment:
+          - PUID=1000
+          - PGID=1000
+          - TZ=Etc/UTC
+        volumes:
+          - ./:/home/
+        ports:
+          - 8891:3000
+          - 8892:3001
+        restart: unless-stopped
