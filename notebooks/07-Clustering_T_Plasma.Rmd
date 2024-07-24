@@ -1,0 +1,776 @@
+---
+title: "Re-cluster T and Plasma"
+author: "Jacopo Umberto verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# Re-clustering CD4 T and plasma
+
+They show too many similar markers, let's try to merge them and divide by specific markers:
+
+
+
+
+
+
+```{r spatial-load-data, message=FALSE, cache=FALSE}
+library(SpatialExperiment)
+library(SingleCellExperiment)
+library(tidyverse)
+library(cytomapper)
+library(imcRtools)
+library(stringr)
+library(scater)
+library(BiocParallel)
+library(viridis)
+library(mclust)
+multicore=MulticoreParam(workers=16)
+
+
+update_label <- function(old_object, new_object){
+    old_object[,colnames(old_object) %in% colnames(new_object)]$major_celltype <- new_object$mclust_label
+    return(old_object)
+    
+}
+    
+
+
+spe <- readRDS("../data/non_denoised/spe_cell_annotation_exprs.Rds")
+
+```
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+library(gridExtra)
+library(grid)
+library(pheatmap)
+
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('CD4 T', 'CD8 T', 'Plasma')]
+```
+
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CD3','CD4','CD8','CD20', 'CD138')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r}
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='B lineage',
+                           "2"='T (CD4)',
+                           "3"='B lineage',
+                           "4"='T (CD8)',
+                           "5"='T (CD4)',
+                           "6"='T (CD4)',
+                           "7"='T (CD8)',
+                           "8"='T lineage',
+                           "9"='B lineage',
+                           "10"='T (CD4)')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='B lineage',
+                           "2"='T (CD4)',
+                           "3"='B lineage',
+                           "4"='T (CD8)',
+                           "5"='T (CD4)',
+                           "6"='T (CD4)',
+                           "7"='T (CD8)',
+                           "8"='T lineage',
+                           "9"='B lineage',
+                           "10"='T (CD4)')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='Not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=10}
+df = as.data.frame(prop.table(table(spe$major_celltype, spe$sample_id), 1))
+ggplot(df, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = "identity", color='black', linewidth=.2) +
+  labs(x = "Cluster", y = "Proportion", 
+       title = "Stacked Barplot of Sample Proportions in Clusters") +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis tick labels
+
+```
+
+## B lineage:
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('B lineage')]
+```
+
+
+```{r}
+library(pheatmap)
+df=t(exprs(spe_tmp))[,c('CD20','CD27','CD138','CD3','CD4','CD11c')]
+corr_df = cor(df)
+
+pheatmap(corr_df, display_numbers = TRUE)
+```
+
+
+
+```{r}
+df = as.data.frame(df)
+
+ggplot(df, aes(x=CD20, y=CD3)) +
+  geom_point()
+
+```
+
+
+
+```{r}
+
+ggplot(df, aes(x=CD27, y=CD3)) +
+  geom_point()
+
+```
+
+
+
+```{r}
+
+ggplot(df, aes(x=CD20, y=CD4)) +
+  geom_point()
+
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CD27','CD3')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r}
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='B-T',
+                           "2"='B mem',
+                           "3"='B-T',
+                           "4"='B-T',
+                           "5"='B-T',
+                           "6"='B-T',
+                           "7"='B-T',
+                           "8"='B-T')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='B-T',
+                           "2"='B mem',
+                           "3"='B-T',
+                           "4"='B-T',
+                           "5"='B-T',
+                           "6"='B-T',
+                           "7"='B-T',
+                           "8"='B-T')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='Not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+
+## CD4 T
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('T (CD4)')]
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CCR4','CCR7','CD45RO','FoxP3','CCR6','CD127')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r}
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='CD4 Treg',
+                           "2"='CD4 Th17',
+                           "3"='CD4 Tmem',
+                           "4"='CD4 Tunspecified',
+                           "5"='CD4 Treg',
+                           "6"='CD4 Tunspecified',
+                           "7"='CD4 Tem',
+                           "8"='CD4 Tem',
+                           "9"='CD4 Temra',
+                           "10"='CD4 Tnaive')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD4 Treg',
+                           "2"='CD4 Th17',
+                           "3"='CD4 Tmem',
+                           "4"='CD4 Tunspecified',
+                           "5"='CD4 Treg',
+                           "6"='CD4 Tunspecified',
+                           "7"='CD4 Tem',
+                           "8"='CD4 Tem',
+                           "9"='CD4 Temra',
+                           "10"='CD4 Tnaive')
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=6,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+
+
+
+## CD8 T
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('T (CD8)')]
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CCR7','CD127','CD45RO')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r }
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='CD8 Tnaive',
+                           "2"='CD8 Tnaive',
+                           "3"='CD8 Tcm',
+                           "4"='CD8 Tem',
+                           "5"='CD8 Tem',
+                           "6"='CD8 Temra',
+                           "7"='CD8 Tem')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD8 Tnaive',
+                           "2"='CD8 Tnaive',
+                           "3"='CD8 Tcm',
+                           "4"='CD8 Tem',
+                           "5"='CD8 Tem',
+                           "6"='CD8 Temra',
+                           "7"='CD8 Tem')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+### CD8 Tem
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('CD8 Tem')]
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('Granzyme_B','Granzyme_K')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r }
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='CD8 Tem-GZMB',
+                           "2"='CD8 Tem-GZMB',
+                           "3"='CD8 Tem-GZMB',
+                           "4"='CD8 Tem-GZMB',
+                           "5"='CD8 Tem')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD8 Tem-GZMB',
+                           "2"='CD8 Tem-GZMB',
+                           "3"='CD8 Tem-GZMB',
+                           "4"='CD8 Tem-GZMB',
+                           "5"='CD8 Tem')
+
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype",
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+### CD8 Temra
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('CD8 Temra')]
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('Granzyme_B','Granzyme_K')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r }
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='CD8 Temra',
+                           "2"='CD8 Temra-GZMB',
+                           "3"='CD8 Temra-GZMB',
+                           "4"='CD8 Temra-GZMB',
+                           "5"='CD8 Temra')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD8 Temra',
+                           "2"='CD8 Temra-GZMB',
+                           "3"='CD8 Temra-GZMB',
+                           "4"='CD8 Temra-GZMB',
+                           "5"='CD8 Temra')
+
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype",
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+## NK
+
+
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('NK')]
+```
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CD56','CD16')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r fig.height=5, fig.width=10}
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='CD56 dim NK',
+                           "2"='CD56 bright NK',
+                           "3"='CD56 bright NK',
+                           "4"='CD56 bright NK',
+                           "5"='CD56 dim NK',
+                           "6"='CD56 dim NK')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD56 dim NK',
+                           "2"='CD56 bright NK',
+                           "3"='CD56 bright NK',
+                           "4"='CD56 bright NK',
+                           "5"='CD56 dim NK',
+                           "6"='CD56 dim NK')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+# Save object
+
+```{r save-objects}
+saveRDS(spe, "../data/non_denoised/spe_minor_celltypes_T.Rds")
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,660 @@
+---
+title: 'Annotating clusters'
+author: "Jacopo Umberto verga"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+    
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Single Cell object
+
+I assigned the major cell types using a XGBoost classifier trained with a subset of cells manually annotated. Now I am going to load the labels here and assign sub-types with Gaussian Mixture Models.
+
+
+
+```{r spatial-load-data, message=FALSE, cache=FALSE}
+library(SpatialExperiment)
+library(SingleCellExperiment)
+library(tidyverse)
+library(cytomapper)
+library(imcRtools)
+library(stringr)
+library(scater)
+library(BiocParallel)
+library(viridis)
+multicore=MulticoreParam(workers=16)
+
+
+spe <- readRDS("../data/non_denoised/spe_batch_corrected_exprs.Rds")
+
+cell_labels <- read.csv('../data/non_denoised/csv_tables_all_cells/major_labels.csv',row.names=1)
+spe$major_celltype <- cell_labels$major_celltype
+```
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+library(gridExtra)
+library(grid)
+library(pheatmap)
+
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+```{r}
+props=as.data.frame(table(spe$major_celltype))%>%
+    mutate(Freq=Freq/sum(Freq))
+ggplot(props, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat='identity')+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),legend.position = "none") +
+    labs(x='Cell type',y='Proportion', title='Cell types proportions after XGBoost classification') 
+```
+
+
+
+
+We have quite mixed cell types, now I am going to refine the classification. First I start with Megakaryocytes, they have some expression of myeloid markers.
+
+```{r}
+update_label <- function(old_object, new_object){
+    old_object[,colnames(old_object) %in% colnames(new_object)]$major_celltype <- new_object$mclust_label
+    return(old_object)
+    
+}
+    
+```
+
+
+
+# Cleaning up Megakaryocytes:
+
+Many positive markers, Use CD31, CD68, CD14, CD16
+
+
+ 
+```{r}
+spe_megakaryo = spe[,spe$major_celltype == 'Megakaryocytes']
+```
+ 
+ 
+```{r}
+library(mclust)
+mat <- as.data.frame(t(exprs(spe_megakaryo))[,c('CD31','CD68','CD16','CD163')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+spe_megakaryo$mclust_cluster = clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+ 
+
+ 
+```{r}
+cluster_celltype <- recode(spe_megakaryo$mclust_cluster,
+                           "1"='Megakaryocytes',
+                           "2"='Other myeloid',
+                           "3"='Other myeloid',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Megakaryocytes',
+                           "8"='Other myeloid',
+                           "9"='Other myeloid',
+                           "10"='Megakaryocytes')
+
+spe_megakaryo$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='Megakaryocytes',
+                           "2"='Other myeloid',
+                           "3"='Other myeloid',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Megakaryocytes',
+                           "8"='Other myeloid',
+                           "9"='Other myeloid',
+                           "10"='Megakaryocytes')
+
+spe_megakaryo$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_megakaryo)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+# Cleaning up Other myeloid:
+
+
+
+ 
+```{r}
+spe_myelo_a = spe[,spe$major_celltype == 'Other myeloid']
+```
+ 
+ 
+```{r}
+mat <- as.data.frame(t(exprs(spe_myelo_a))[,c('CD14','CD68','CD16', 'CD11b')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+spe_myelo_a$mclust_cluster = clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=4,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+ 
+
+ 
+```{r}
+cluster_celltype <- recode(spe_myelo_a$mclust_cluster,
+                           "1"='Macro',
+                           "2"='Other myeloid',
+                           "3"='Other myeloid',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Other myeloid',
+                           "8"='Other myeloid',
+                           "9"='Monocytes',
+                           "10"='Macro')
+
+spe_myelo_a$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='Macro',
+                           "2"='Other myeloid',
+                           "3"='Other myeloid',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Other myeloid',
+                           "8"='Other myeloid',
+                           "9"='Monocytes',
+                           "10"='Macro')
+
+spe_myelo_a$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=4,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+spe <- update_label(spe, spe_myelo_a)
+```
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+```{r}
+table(spe$major_celltype)
+```
+
+
+
+## Define other myeloid:
+
+CD117, CD11c, CD11b, HLA-DR
+
+ 
+```{r}
+spe_mast_a = spe[,spe$major_celltype == 'Other myeloid']
+```
+ 
+ 
+```{r}
+mat <- as.data.frame(t(exprs(spe_mast_a))[,c('CD117', 'CD11c', 'CD11b', 'HLA-DR')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+```{r}
+spe_mast_a$mclust_cluster = clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+
+
+ 
+```{r}
+cluster_celltype <- recode(spe_mast_a$mclust_cluster,
+                           "1"='DC',
+                           "2"='Other myeloid',
+                           "3"='DC',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Other myeloid',
+                           "8"='Other myeloid',
+                           "9"='Other myeloid',
+                           "10"='Other myeloid')
+
+spe_mast_a$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='DC',
+                           "2"='Other myeloid',
+                           "3"='DC',
+                           "4"='Other myeloid',
+                           "5"='Other myeloid',
+                           "6"='Other myeloid',
+                           "7"='Other myeloid',
+                           "8"='Other myeloid',
+                           "9"='Other myeloid',
+                           "10"='Other myeloid')
+
+
+spe_mast_a$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+spe <- update_label(spe, spe_mast_a)
+```
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+```{r}
+table(spe$major_celltype)
+```
+
+
+
+
+
+
+
+
+## Macro:
+
+
+ 
+```{r}
+spe_mono_macro = spe[,spe$major_celltype == 'Macro']
+```
+ 
+ 
+```{r}
+mat <- as.data.frame(t(exprs(spe_mono_macro))[,c('CD14', 'CD16', 'CD68', 'CD163','HLA-DR')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+spe_mono_macro$mclust_cluster = clusters$classification
+```
+
+```{r}
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+ 
+
+ 
+```{r}
+cluster_celltype <- recode(spe_mono_macro$mclust_cluster,
+                           "1"='Macrophages-hla',
+                           "2"='Macrophages',
+                           "3"='Macrophages',
+                           "4"='Macrophages',
+                           "5"='Macrophages-hla',
+                           "6"='Macrophages',
+                           "7"='Macrophages-CD163 neg',
+                           "8"='Macrophages-hla',
+                           "9"='Macrophages-hla',
+                           "10"='Macrophages')
+
+spe_mono_macro$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='Macrophages-hla',
+                           "2"='Macrophages',
+                           "3"='Macrophages',
+                           "4"='Macrophages',
+                           "5"='Macrophages-hla',
+                           "6"='Macrophages',
+                           "7"='Macrophages-CD163 neg',
+                           "8"='Macrophages-hla',
+                           "9"='Macrophages-hla',
+                           "10"='Macrophages')
+
+
+spe_mono_macro$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='Non scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+spe <- update_label(spe, spe_mono_macro)
+```
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+# Monocytes:
+
+
+ 
+```{r}
+spe_mono = spe[,spe$major_celltype == 'Monocytes']
+```
+ 
+ 
+```{r}
+mat <- as.data.frame(t(exprs(spe_mono))[,c('CD14', 'CD16', 'CCR4', 'CCR6', 'HLA-DR','CD45','CD11c')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+```{r}
+spe_mono$mclust_cluster = clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+ 
+
+ 
+```{r}
+cluster_celltype <- recode(spe_mono$mclust_cluster,
+                           "1"='Non Classical Monocytes',
+                           "2"='Intermediate Monocytes',
+                           "3"='Classical Monocytes',
+                           "4"='Non Classical Monocytes',
+                           "5"='Classical Monocytes',
+                           "6"='Classical Monocytes',
+                           "7"='Non Classical Monocytes',
+                           "8"='Non Classical Monocytes',
+                           "9"='Non Classical Monocytes',
+                           "10"='Classical Monocytes')
+
+spe_mono$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='Non Classical Monocytes',
+                           "2"='Intermediate Monocytes',
+                           "3"='Classical Monocytes',
+                           "4"='Non Classical Monocytes',
+                           "5"='Classical Monocytes',
+                           "6"='Classical Monocytes',
+                           "7"='Non Classical Monocytes',
+                           "8"='Non Classical Monocytes',
+                           "9"='Non Classical Monocytes',
+                           "10"='Classical Monocytes')
+
+
+spe_mono$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+spe <- update_label(spe, spe_mono)
+```
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+# T:
+
+
+ 
+```{r}
+spe_T = spe[,spe$major_celltype == 'T']
+```
+ 
+ 
+```{r}
+mat <- as.data.frame(t(exprs(spe_T))[,c('CD4', 'CD8')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+spe_T$mclust_cluster = clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+ 
+ 
+
+ 
+```{r}
+cluster_celltype <- recode(spe_T$mclust_cluster,
+                           "1"='CD4 T',
+                           "2"='CD4 T',
+                           "3"='CD4 T',
+                           "4"='CD4 T',
+                           "5"='CD8 T',
+                           "6"='CD4 T',
+                           "7"='CD4 T',
+                           "8"='CD8 T',
+                           "9"='CD4 T')
+
+spe_T$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='CD4 T',
+                           "2"='CD4 T',
+                           "3"='CD4 T',
+                           "4"='CD4 T',
+                           "5"='CD8 T',
+                           "6"='CD4 T',
+                           "7"='CD4 T',
+                           "8"='CD8 T',
+                           "9"='CD4 T')
+
+
+spe_T$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='Non scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=2,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+spe <- update_label(spe, spe_T)
+```
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+
+
+
+
+```{r eval=FALSE, fig.height=6, fig.width=15, cache=FALSE, include=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+```{r}
+props=as.data.frame(table(spe$major_celltype))%>%
+    mutate(Freq=Freq/sum(Freq))
+ggplot(props, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat='identity')+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),legend.position = "none") +
+    labs(x='Cell type',y='Proportion', title='Cell types proportions after XGBoost classification') 
+```
+
+
+# Save data
+
+```{r}
+saveRDS(spe, '../data/non_denoised/spe_cell_annotation_exprs.Rds')
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+

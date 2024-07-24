@@ -1,0 +1,305 @@
+---
+title: "Re-cluster Monocytes"
+author: "Jacopo Umberto verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# Re-clustering Monocytes
+
+They show too many similar markers, let's try to merge them and divide by specific markers:
+
+
+
+```{r spatial-load-data, message=FALSE, cache=FALSE}
+library(SpatialExperiment)
+library(SingleCellExperiment)
+library(tidyverse)
+library(cytomapper)
+library(imcRtools)
+library(stringr)
+library(scater)
+library(BiocParallel)
+library(viridis)
+library(mclust)
+multicore=MulticoreParam(workers=16)
+
+
+update_label <- function(old_object, new_object){
+    old_object[,colnames(old_object) %in% colnames(new_object)]$major_celltype <- new_object$mclust_label
+    return(old_object)
+    
+}
+    
+
+
+spe <- readRDS("../data/non_denoised/spe_minor_celltypes_T.Rds")
+
+```
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+library(gridExtra)
+library(grid)
+library(pheatmap)
+
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+## Mono
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('Classical Monocytes', 'Non Classical Monocytes', 'Intermediate Monocytes')]
+```
+
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CD45', 'HLA-DR', 'CD14', 'CD11c', 'CD16')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r}
+
+library(pheatmap)
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='Non Classical Monocytes',
+                           "2"='Classical Monocytes',
+                           "3"='Classical Monocytes',
+                           "4"='Non Classical Monocytes',
+                           "5"='Classical Monocytes',
+                           "6"='Intermediate Monocytes',
+                           "7"='Non Classical Monocytes',
+                           "8"='Non Classical Monocytes',
+                           "9"='Intermediate Monocytes',
+                           "10"='Classical Monocytes')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='Non Classical Monocytes',
+                           "2"='Classical Monocytes',
+                           "3"='Classical Monocytes',
+                           "4"='Non Classical Monocytes',
+                           "5"='Classical Monocytes',
+                           "6"='Intermediate Monocytes',
+                           "7"='Non Classical Monocytes',
+                           "8"='Non Classical Monocytes',
+                           "9"='Intermediate Monocytes',
+                           "10"='Classical Monocytes')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='Not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+library(gridExtra)
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype", 
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=10}
+df = as.data.frame(prop.table(table(spe$major_celltype, spe$sample_id), 1))
+ggplot(df, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = "identity", color='black', linewidth=.2) +
+  labs(x = "Cluster", y = "Proportion", 
+       title = "Stacked Barplot of Sample Proportions in Clusters") +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis tick labels
+
+```
+
+
+
+## B lineage
+
+```{r}
+spe_tmp = spe[,spe$major_celltype %in% c('B', 'B mem')]
+```
+
+
+
+
+```{r}
+mat <- as.data.frame(t(exprs(spe_tmp))[,c('CD20','CD27','CD138')])
+set.seed(12345)
+mBIC <- mclust::mclustBIC(mat, G=2:10)
+set.seed(12345)
+clusters = Mclust(mat, x=mBIC)
+```
+
+
+
+
+
+
+
+```{r}
+
+library(pheatmap)
+spe_tmp$mclust_cluster =clusters$classification
+heatmap_data = clusters$parameters$mean
+colnames(heatmap_data) <- seq(1:dim(heatmap_data)[2])
+pheatmap(heatmap_data, main="Not scaled", display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+pheatmap(heatmap_data, scale='row', main='Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=3,show_colnames=TRUE,fontsize_col=20,angle_col=0)
+```
+
+
+
+
+
+
+```{r}
+cluster_celltype <- recode(spe_tmp$mclust_cluster,
+                           "1"='B mem',
+                           "2"='B mem',
+                           "3"='B',
+                           "4"='B mem',
+                           "5"='B unk',
+                           "6"='B mem',
+                           "7"='B unk',
+                           "8"='B mem',
+                           "9"='B',
+                           "10"='B unk')
+
+spe_tmp$mclust_label <-cluster_celltype
+
+colnames(heatmap_data) <- recode(colnames(heatmap_data),
+                           "1"='B mem',
+                           "2"='B mem',
+                           "3"='B',
+                           "4"='B mem',
+                           "5"='B unk',
+                           "6"='B mem',
+                           "7"='B unk',
+                           "8"='B mem',
+                           "9"='B',
+                           "10"='B unk')
+
+
+
+spe_tmp$mclust_label <-cluster_celltype
+
+pheatmap(heatmap_data, scale='none', main='not Scaled', display_numbers=TRUE,fontsize_number=10,cutree_cols=1,show_colnames=TRUE,fontsize_col=10,angle_col=45)
+```
+
+
+```{r}
+
+
+spe <- update_label(spe, spe_tmp)
+```
+
+
+
+
+
+```{r fig.height=6, fig.width=15, cache=FALSE}
+mat = subset(as.data.frame(t(exprs(spe))), select = -c(Histone_H3, ICSK1, ICSK2))
+mat$cluster = spe$major_celltype
+mat <- aggregate(. ~ cluster, data = mat, FUN = mean)
+rownames(mat) <- mat$cluster
+mat$cluster <- NULL
+p1 = pheatmap(t(mat), color = viridis(100), scale='row')
+p2 = dittoSeq::dittoDimPlot(spe, var = "major_celltype",
+             reduction.use = "UMAP_mnnCorrected", size = 0.2,
+             do.label = TRUE, legend.show=FALSE) +
+    ggtitle("Phenograph clusters on UMAP_mnnCorrected") + guides(fill=guide_legend(ncol=5))
+
+grid.arrange(arrangeGrob(p1$gtable), arrangeGrob(p2), ncol=2)
+```
+
+
+
+
+```{r}
+plot(table(spe_tmp$mclust_cluster))
+```
+
+
+
+
+
+
+
+
+# Save object
+
+```{r save-objects}
+saveRDS(spe, "../data/non_denoised/spe_minor_celltypes_mono.Rds")
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
