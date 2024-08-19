@@ -1,0 +1,61 @@
+﻿services:
+    registration:
+        image: python_env:latest
+        profiles:
+          - python
+        build:
+          context: ./python_env
+          dockerfile: Dockerfile
+        container_name: python_env
+        volumes:
+          - /usr/local/cuda-12.5/lib64/:/usr/local/cuda-12.5/lib64/
+          - ./:/home/jacopo/work
+        user: 'root'
+        ports:
+          - "8888:8888"
+        environment:
+          - ENABLE_JUPYTER_LAB=yes
+          - JUPYTER_TOKEN=123
+          - NB_USER=jacopo
+          - CHOWN_HOME=yes
+        working_dir: /home/jacopo
+    registration_gpu:
+        image: python_env:latest
+        profiles:
+          - python_gpu
+        build:
+          context: ./python_env
+          dockerfile: Dockerfile
+        container_name: python_env
+        volumes:
+          - /usr/local/cuda-12.5/lib64/:/usr/local/cuda-12.5/lib64/
+          - ./:/home/jacopo/work
+        user: 'root'
+        ports:
+          - "8888:8888"
+        environment:
+          - ENABLE_JUPYTER_LAB=yes
+          - JUPYTER_TOKEN=123
+          - NB_USER=jacopo
+          - CHOWN_HOME=yes
+        working_dir: /home/jacopo
+        deploy:
+          resources:
+            reservations:
+              devices:
+                - driver: nvidia
+                  count: 1
+                  capabilities: [gpu]
+    napari:
+        image: napari_env:latest
+        profiles:
+          - napari
+        build:
+          context: ./napari_env
+          dockerfile: Dockerfile
+        container_name: napari_env
+        volumes:
+          - ./:/home/
+        user: 'root'
+        ports:
+          - "8890:9876"
