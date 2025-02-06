@@ -1,0 +1,115 @@
+---
+title: "Spillover correction"
+author: "Jacopo Umberto Verga"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries}
+invisible(suppressMessages(c(library(imcRtools),
+                 library(tidyverse),
+                 library(patchwork),
+                 library(scater),
+                 library(BiocParallel),
+                 library(CATALYST),
+                 library(pheatmap),
+                 library(cytomapper))))
+
+multicore=MulticoreParam(workers=16)
+```
+
+
+# Import spatial dataset
+
+```{r load_spe}
+spe <- readRDS("/home/rstudio/workspace/data/emd/spe.rds")
+spe
+```
+
+
+
+
+## Single-cell data compensation
+
+The `CATALYST` package can be used to perform spillover compensation on the
+**single-cell mean intensities**. Here, the `SpatialExperiment` object generated
+in in the previous Session is read in. The `CATALYST` package requires an entry
+to `rowData(spe)$channel_name` for the `compCytof` function to run. This entry
+should contain the metal isotopes in the form (mt)(mass)Di (e.g., `Sm152Di` for
+Samarium isotope with the atomic mass 152). 
+
+The `compCytof` function performs channel spillover compensation on the mean
+pixel intensities per channel and cell. Here, we will not overwrite the assays
+in the `SpatialExperiment` object to later highlight the effect of compensation.
+As shown in the previous session, also the compensated counts are
+asinh-transformed using a cofactor of 1.
+
+```{r single-cell-compensation}
+
+sm <- read.csv('/home/rstudio/workspace/data/sm.csv', header = TRUE,  check.names = FALSE, row.names = '')
+sm <- sm[rownames(sm)]
+sm[is.na(sm)] <- 0
+sm <- sm/100
+sm <- as.matrix(sm)
+diag(sm) <- 1
+# TODO drop not used columns
+channel_names <- paste0(gsub("[()]","", rowData(spe)$channel),"Di")
+rowData(spe)$channel_name <- channel_names
+# rownames(sm) <- channel_names
+# colnames(sm) <- channel_names
+
+isotope_list <- CATALYST::isotope_list
+isotope_list$Ar <- 80
+
+
+spe <- compCytof(spe, sm, 
+                 transform = TRUE, cofactor = 1,
+                 isotope_list = isotope_list, 
+                 overwrite = FALSE)
+```     
+
+
+
+To check the effect of channel spillover compensation, the expression of markers
+that are affected by spillover (e.g., GZMK in channel Gd(158) and aSMA in
+channel Nd(142)) can be visualized in form of scatter plots before and after
+compensation.
+
+```{r visualize-single-cell-spillover, message=FALSE}
+library(dittoSeq)
+library(patchwork)
+
+spill1='aSMA'
+spill2='GranzymeK'
+
+before <- dittoScatterPlot(spe, x.var = spill1, y.var = spill2,
+                           assay.x = "exprs", assay.y = "exprs") +
+    ggtitle("Before compensation")
+
+after <- dittoScatterPlot(spe, x.var = spill1, y.var = spill2,
+                          assay.x = "compexprs", assay.y = "compexprs") +
+    ggtitle("After compensation")
+before + after
+```
+
+We observe that the spillover Nd(142) --> Gd(158) was successfully corrected.
+To facilitate further downstream analysis, the non-compensated assays can now be
+replaced by their compensated counterparts:
+
+```{r overwrite-assays}
+assay(spe, "counts") <- assay(spe, "compcounts") 
+assay(spe, "exprs") <- assay(spe, "compexprs") 
+assay(spe, "compcounts") <- assay(spe, "compexprs") <- NULL
+```
+
+```{r save-objects-read-data}
+saveRDS(spe, "/home/rstudio/workspace/data/emd/spe_spllover_corrected.rds")
+```
