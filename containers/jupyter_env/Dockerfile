@@ -10,5 +10,5 @@ RUN pip install scanpy squidpy "spatialdata[extra]" "napari[all]"
 RUN pip install openchord
 RUN pip install opencv-python
 
-USER jacopo
-WORKDIR /home/jacopo
+USER foster
+WORKDIR /home/unix/foster
