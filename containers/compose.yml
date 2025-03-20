@@ -22,7 +22,7 @@ services:
           dockerfile: Dockerfile
         container_name: jupyter_env
         volumes:
-          - ./:/home/foster/work
+          - ./:/home/unix/foster/work
         user: 'root'
         ports:
           - "8888:8888"
@@ -31,7 +31,7 @@ services:
           - JUPYTER_TOKEN=123
           - NB_USER=foster
           - CHOWN_HOME=yes
-        working_dir: /home/foster
+        working_dir: /home/unix/foster
     inkscape:
         image: lscr.io/linuxserver/inkscape:latest
         profiles:
