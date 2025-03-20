@@ -21,5 +21,5 @@ RUN pip install \
 
 RUN pip install filetype
 ENV LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-USER jacopo
-WORKDIR /home/jacopo
+USER foster
+WORKDIR /home/unix/foster
