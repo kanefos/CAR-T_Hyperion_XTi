@@ -29,10 +29,9 @@ services:
         environment:
           - ENABLE_JUPYTER_LAB=yes
           - JUPYTER_TOKEN=123
-          - NB_USER=foster #on VM, see `whoami`
-          - NB_UID=24797 #on VM, see `id -u`, allegedly matters more
+          - NB_USER=root #on VM, see `whoami`
           - CHOWN_HOME=yes
-        working_dir: /home/unix/foster
+        working_dir: /home/foster
     inkscape:
         image: lscr.io/linuxserver/inkscape:latest
         profiles:
