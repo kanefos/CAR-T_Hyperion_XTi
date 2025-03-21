@@ -10,7 +10,7 @@ services:
         volumes:
             - ./:/home/rstudio/workspace
         ports:
-            - "8890:8787"
+            - "8787:8787"
         environment:
           - PASSWORD=123
     jupyter:
@@ -22,7 +22,7 @@ services:
           dockerfile: Dockerfile
         container_name: jupyter_env
         volumes:
-          - ./:/home/unix/foster/work
+          - ./:/home/foster/work
         user: 'root'
         ports:
           - "8888:8888"
