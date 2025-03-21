@@ -10,7 +10,7 @@ services:
         volumes:
             - ./:/home/rstudio/workspace
         ports:
-            - "8787:8787"
+            - "8890:8787"
         environment:
           - PASSWORD=123
     jupyter:
